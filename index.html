@@ -183,5 +183,14 @@ svgBtn.addEventListener('click', () => {
 [isoSel, framesSel, latSel, pxInput].forEach(el => el.addEventListener('input', drawPreview));
 drawPreview();
 </script>
+  <script>
+  function sendHeight(){
+    const h = document.documentElement.scrollHeight || document.body.scrollHeight;
+    parent.postMessage({ dxHeight: h }, "*");
+  }
+  window.addEventListener("load", sendHeight);
+  new ResizeObserver(sendHeight).observe(document.body);
+</script>
+
 </body>
 </html>
