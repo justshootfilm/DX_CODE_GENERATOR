@@ -21,12 +21,3 @@ You can then export the result as a **gapless PNG** or **SVG** image for printin
   - **SVG** (infinitely scalable, perfect for printing/label making)
 - Gapless output (blocks butt together exactly, just like real DX codes)
 
----
-
-## 🛠️ Installation / Running Locally
-No build step required — it’s just a static HTML file.
-
-1. Clone or download this repository
-   ```bash
-   git clone https://github.com/YOUR-USERNAME/YOUR-REPO.git
-   cd YOUR-REPO
