@@ -4,25 +4,194 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>DX Code Generator — Gapless Export</title>
-<!-- keep your existing styles here -->
-...
+<style>
+  :root { --bg:#0b0d10; --card:#14171c; --ink:#0b0d10; --metal:#f7f7f7; --accent:#ff6b00; --muted:#98a2b3; }
+  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:#e6e9ef;font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,Inter,Arial}
+  .wrap{max-width:980px;margin:32px auto;padding:20px}
+  h1{font-size:26px;margin:0 0 10px}
+  .card{background:var(--card);border-radius:16px;padding:18px;box-shadow:0 10px 30px rgba(0,0,0,.25)}
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media (max-width:880px){.row{grid-template-columns:1fr}}
+  label{font-size:14px;color:#cbd5e1;margin-bottom:6px;display:block}
+  select, input[type="number"]{width:100%;appearance:none;background:#0f1217;color:#e6e9ef;border:1px solid #232833;border-radius:12px;padding:12px 14px;font-size:15px}
+  .panel{display:grid;gap:10px}
+  .btns{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+  button{background:#0f1217;border:1px solid #232833;border-radius:12px;color:#e6e9ef;padding:10px 14px;font-size:14px;cursor:pointer}
+  button:hover{border-color:#404756}
+  .preview{display:grid;gap:10px;place-items:center}
+  canvas{background:#22252b;border-radius:14px}
+  .caption{font-size:12px;color:#94a3b8}
+</style>
 </head>
 <body>
-  <!-- your existing app markup (selectors, canvas, buttons, etc.) -->
+  <div class="wrap">
+    <h1>DX Code Generator</h1>
+    <div class="card">
+      <div class="row">
+        <div class="panel">
+          <div>
+            <label for="iso">ASA / ISO</label>
+            <select id="iso"></select>
+          </div>
+          <div>
+            <label for="frames">Frame Count</label>
+            <select id="frames"></select>
+          </div>
+          <div>
+            <label for="lat">Push / Pull (Exposure Latitude)</label>
+            <select id="lat"></select>
+          </div>
+          <div>
+            <label for="px">Export width (px)</label>
+            <input id="px" type="number" min="200" step="10" value="800">
+          </div>
+          <div class="btns">
+            <button id="pngBtn">Download PNG (gapless)</button>
+            <button id="svgBtn">Download SVG (gapless)</button>
+          </div>
+          <p class="caption">Downloads are rendered with <strong>no gaps</strong> between blocks. Preview shows a subtle gutter for clarity.</p>
+        </div>
+
+        <div class="preview">
+          <canvas id="cnv" width="800" height="320" aria-label="DX grid preview"></canvas>
+          <div class="caption">Top row: G • S1 • S2 • S3 • S4 • S5 — Bottom row: G • L1 • L2 • L3 • T1 • T2</div>
+        </div>
+      </div>
+    </div>
+  </div>
 
 <script>
-/* ===== existing JS for DX generator ===== */
-/* ... all the code you already had ... */
-</script>
+/* ==== DX truth tables ==== */
+const ISO_TABLE = {
+  25:['F','F','F','T','F'],32:['F','F','F','F','T'],40:['F','F','F','T','T'],
+  50:['T','F','F','T','F'],64:['T','F','F','F','T'],80:['T','F','F','T','T'],
+  100:['F','T','F','T','F'],125:['F','T','F','F','T'],160:['F','T','F','T','T'],
+  200:['T','T','F','T','F'],250:['T','T','F','F','T'],320:['T','T','F','T','T'],
+  400:['F','F','T','T','F'],500:['F','F','T','F','T'],640:['F','F','T','T','T'],
+  800:['T','F','T','T','F'],1000:['T','F','T','F','T'],1250:['T','F','T','T','T'],
+  1600:['F','T','T','T','F'],2000:['F','T','T','F','T'],2500:['F','T','T','T','T'],
+  3200:['T','T','T','T','F'],4000:['T','T','T','F','T'],5000:['T','T','T','T','T']
+};
+const LENGTH_TABLE = {
+  '12':['T','F','F'],'20':['F','T','F'],'24':['T','T','F'],'36':['F','F','T'],
+  '48':['T','F','T'],'60':['F','T','T'],'72':['T','T','T'],'other':['F','F','F']
+};
+const LAT_TABLE = {
+  '±½ stop':['F','F'],'±1 stop':['T','F'],'+2 / −1':['F','T'],'+3 / −1':['T','T']
+};
 
-<!-- ✨ NEW: auto-height messaging when embedded in an iframe -->
-<script>
-  function sendHeight(){
+/* ==== UI hooks ==== */
+const isoSel = document.getElementById('iso');
+const framesSel = document.getElementById('frames');
+const latSel = document.getElementById('lat');
+const pxInput = document.getElementById('px');
+const cnv = document.getElementById('cnv');
+const ctx = cnv.getContext('2d');
+const pngBtn = document.getElementById('pngBtn');
+const svgBtn = document.getElementById('svgBtn');
+
+function option(el, value, text){ const o=document.createElement('option'); o.value=value; o.textContent=text; el.appendChild(o); }
+Object.keys(ISO_TABLE).forEach(v => option(isoSel, v, `ASA/ISO ${v}`));
+['12','20','24','36','48','60','72','other'].forEach(v => option(framesSel, v, v==='other' ? 'Other/Unknown' : `${v} frames`));
+Object.keys(LAT_TABLE).forEach(v => option(latSel, v, v));
+isoSel.value='400'; framesSel.value='24'; latSel.value='±1 stop';
+
+/* ==== Data ==== */
+function bits(){
+  return {
+    top: ['T', ...ISO_TABLE[isoSel.value]],
+    bottom: ['T', ...LENGTH_TABLE[framesSel.value], ...LAT_TABLE[latSel.value]]
+  };
+}
+
+/* ==== Preview (with small gutters so you can see the cells) ==== */
+function drawPreview(){
+  const W = Math.max(200, +pxInput.value|0);
+  cnv.width = W; cnv.height = Math.round(W * 0.4);
+  const P = 12, cols=6, rows=2;
+  const gridW = W - P*2, gridH = cnv.height - P*2;
+  const gap = Math.round(gridW*0.02); // preview ONLY
+  const cellW = Math.floor((gridW - gap*(cols-1)) / cols);
+  const cellH = Math.floor((gridH - gap) / rows);
+  ctx.clearRect(0,0,cnv.width,cnv.height);
+  ctx.fillStyle = '#1a1e24'; ctx.fillRect(0,0,cnv.width,cnv.height);
+  const b = [bits().top, bits().bottom];
+  for(let y=0;y<rows;y++){
+    for(let x=0;x<cols;x++){
+      const X = P + x*(cellW+gap);
+      const Y = P + y*(cellH+gap);
+      ctx.fillStyle = (b[y][x]==='T') ? '#f7f7f7' : '#0b0d10';
+      ctx.fillRect(X, Y, cellW, cellH);
+    }
+  }
+  sendHeight();
+}
+
+/* ==== Export helpers (GAPLESS) ==== */
+function exportCanvas(){
+  const W = Math.max(200, +pxInput.value|0);
+  const H = Math.round(W*0.4);
+  const cols=6, rows=2;
+  const cellW = Math.floor(W/cols);
+  const cellH = Math.floor(H/rows);
+  const tmp = document.createElement('canvas');
+  tmp.width = cols*cellW; tmp.height = rows*cellH;
+  const tctx = tmp.getContext('2d');
+  const b = [bits().top, bits().bottom];
+  for(let y=0;y<rows;y++){
+    for(let x=0;x<cols;x++){
+      tctx.fillStyle = (b[y][x]==='T') ? '#f7f7f7' : '#0b0d10';
+      tctx.fillRect(x*cellW, y*cellH, cellW, cellH);
+    }
+  }
+  return tmp;
+}
+function exportSVG(){
+  const W = Math.max(200, +pxInput.value|0);
+  const H = Math.round(W*0.4);
+  const cols=6, rows=2;
+  const cellW = (W/cols), cellH = (H/rows);
+  const b = [bits().top, bits().bottom];
+  let rects = [];
+  for(let y=0;y<rows;y++){
+    for(let x=0;x<cols;x++){
+      const fill = (b[y][x]==='T') ? '#f7f7f7' : '#0b0d10';
+      rects.push(`<rect x="${(x*cellW).toFixed(2)}" y="${(y*cellH).toFixed(2)}" width="${cellW.toFixed(2)}" height="${cellH.toFixed(2)}" fill="${fill}"/>`);
+    }
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${rects.join('')}</svg>`;
+}
+function download(name, url){
+  const a = document.createElement('a'); a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove();
+}
+
+/* ==== Buttons ==== */
+pngBtn.addEventListener('click', () => {
+  const canvas = exportCanvas();
+  const name = `dx_${isoSel.value}_${framesSel.value}_${latSel.value.replace(/\\s+/g,'')}_gapless.png`;
+  download(name, canvas.toDataURL('image/png'));
+});
+svgBtn.addEventListener('click', () => {
+  const svg = exportSVG();
+  const blob = new Blob([svg], {type:'image/svg+xml'});
+  const url = URL.createObjectURL(blob);
+  const name = `dx_${isoSel.value}_${framesSel.value}_${latSel.value.replace(/\\s+/g,'')}_gapless.svg`;
+  download(name, url);
+  setTimeout(()=>URL.revokeObjectURL(url), 1000);
+});
+
+/* ==== init ==== */
+[isoSel, framesSel, latSel, pxInput].forEach(el => el.addEventListener('input', drawPreview));
+drawPreview();
+
+/* ==== Auto-height for embeds ==== */
+function sendHeight(){
+  try {
     const h = document.documentElement.scrollHeight || document.body.scrollHeight;
     parent.postMessage({ dxHeight: h }, "*");
-  }
-  window.addEventListener("load", sendHeight);
-  new ResizeObserver(sendHeight).observe(document.body);
+  } catch(e){}
+}
+new ResizeObserver(sendHeight).observe(document.body);
 </script>
 </body>
 </html>
